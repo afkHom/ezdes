@@ -1,0 +1,8 @@
+node_modules/
+outputs/
+__pycache__/
+*.mjs
+*.png
+*.inspect.ndjson
+Run-EZDES.bat
+syntax-check.js

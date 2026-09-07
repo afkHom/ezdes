@@ -1,0 +1,11 @@
+services:
+  ezdes:
+    build: .
+    container_name: ezdes
+    ports:
+      - "8765:8765"
+    volumes:
+      - ${EZDES_DATA_DIR:-./data}:/data:ro
+    environment:
+      EZDES_OPEN_BROWSER: "0"
+    restart: unless-stopped

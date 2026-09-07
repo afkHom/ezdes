@@ -1,0 +1,10 @@
+node_modules/
+__pycache__/
+*.pyc
+*.png
+syntax-check.js
+build-*.mjs
+extend-to-100-items.mjs
+inspect-*.mjs
+update-speeds.mjs
+outputs/

@@ -1,0 +1,276 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EZDES</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
+  <style>
+    :root { color-scheme: light dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; }
+    body { margin: 0; background: Canvas; color: CanvasText; }
+    main { max-width: 1040px; margin: 0 auto; padding: 38px 20px 64px; }
+    h1 { margin: 0; font-size: clamp(1.65rem, 4vw, 2.35rem); }
+    h2 { margin: 0 0 12px; }
+    .lede, .note, #status, .file-details { color: color-mix(in srgb, CanvasText 68%, Canvas); }
+    .lede { margin: 8px 0 28px; }
+    .panel { border: 1px solid color-mix(in srgb, CanvasText 18%, Canvas); border-radius: 14px; padding: 20px; margin-top: 18px; }
+    label { display: block; font-weight: 650; margin: 14px 0 8px; }
+    input, select, button { font: inherit; }
+    input[type=file] { max-width: 100%; }
+    input[type=number], input[type=text], select { width: 100%; box-sizing: border-box; padding: 9px 10px; border: 1px solid color-mix(in srgb, CanvasText 30%, Canvas); border-radius: 8px; background: Field; color: FieldText; }
+    button { cursor: pointer; padding: 10px 14px; border-radius: 8px; border: 1px solid color-mix(in srgb, CanvasText 30%, Canvas); background: ButtonFace; color: ButtonText; }
+    .primary, .day-picker button.is-selected { background: #0c6b4d; color: white; border-color: #0c6b4d; }
+    .entry, .day-picker, .actions { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 16px; align-items: center; }
+    .entry input { flex: 1 1 320px; }
+    .day-label { font-weight: 650; margin-right: 2px; }
+    .controls { display: grid; grid-template-columns: minmax(150px, 1fr) minmax(170px, 2fr); gap: 14px; max-width: 600px; }
+    .note, #status, .file-details { font-size: .94rem; }
+    #status.error { color: #bd2020; }
+    .details-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px 24px; margin: 12px 0 0; }
+    .details-grid dt { font-weight: 650; }
+    .details-grid dd { margin: 0; overflow-wrap: anywhere; }
+    .rules { width: min(100%, 440px); border-collapse: collapse; margin-top: 8px; }
+    .rules th, .rules td { padding: 8px 10px; border-bottom: 1px solid color-mix(in srgb, CanvasText 14%, Canvas); text-align: left; }
+    .rules th { font-size: .8rem; text-transform: uppercase; letter-spacing: .05em; }
+    .rules input { width: 95px; }
+    .table-wrap { overflow-x: auto; }
+    table { width: 100%; border-collapse: collapse; min-width: 720px; }
+    .data-table th, .data-table td { text-align: left; padding: 11px 10px; border-bottom: 1px solid color-mix(in srgb, CanvasText 14%, Canvas); }
+    .data-table th { font-size: .82rem; text-transform: uppercase; letter-spacing: .05em; color: color-mix(in srgb, CanvasText 65%, Canvas); }
+    .internal-score { display: block; text-transform: lowercase; letter-spacing: normal; font-size: .72rem; font-weight: 400; }
+    td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+    .rank { color: color-mix(in srgb, CanvasText 65%, Canvas); }
+    .hidden { display: none; }
+    .inline-priority { width: 78px; padding: 6px 7px; text-align: right; }
+    @media (max-width: 620px) { main { padding: 26px 14px 40px; } .panel { padding: 16px; } .details-grid { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>EZDES</h1>
+    <p class="lede">Arrange production records by copperweight, speed, and production-day priority.</p>
+
+    <section class="panel" aria-labelledby="upload-title">
+      <h2 id="upload-title">Source workbook</h2>
+      <label for="file">Excel file (.xlsx, .xls, .csv)</label>
+      <input id="file" type="file" accept=".xlsx,.xls,.csv">
+      <label for="directory">File directory</label>
+      <div class="entry">
+        <input id="directory" type="text" placeholder="C:\\Files\\Production reports">
+        <button id="latest-file" type="button">Use latest Excel file</button>
+        <button id="refresh-file" type="button">Refresh latest file</button>
+      </div>
+      <p id="folder-status" class="note" aria-live="polite">Start EZDES with Run-EZDES.bat to use a directory path.</p>
+
+      <div id="file-info" class="hidden">
+        <dl class="details-grid file-details">
+          <dt>Selected file</dt><dd id="detail-file">—</dd>
+          <dt>Last modified</dt><dd id="detail-modified">—</dd>
+          <dt>Worksheet</dt><dd><select id="sheet-select" aria-label="Worksheet"></select></dd>
+          <dt>Detected header row</dt><dd id="detail-header">—</dd>
+          <dt>Available data rows</dt><dd id="detail-rows">—</dd>
+        </dl>
+      </div>
+
+      <div class="controls">
+        <div><label for="row-count">Rows to arrange</label><input id="row-count" type="number" min="1" value="7"></div>
+      </div>
+      <div class="day-picker" role="group" aria-label="Production day">
+        <span class="day-label">Production day</span>
+        <button type="button" class="is-selected" data-day="Monday" aria-pressed="true">Monday</button>
+        <button type="button" data-day="Tuesday" aria-pressed="false">Tuesday</button>
+        <button type="button" data-day="Wednesday" aria-pressed="false">Wednesday</button>
+        <button type="button" data-day="Thursday" aria-pressed="false">Thursday</button>
+        <button type="button" data-day="Friday" aria-pressed="false">Friday</button>
+      </div>
+      <div class="actions"><button class="primary" id="organize" type="button">Run</button><button id="download" class="hidden" type="button">Download arranged Excel</button></div>
+      <p id="status" aria-live="polite"></p>
+    </section>
+
+    <section class="panel" aria-labelledby="rules-title">
+      <h2 id="rules-title">Core-weight rules</h2>
+      <p class="note">h means half ounce. Mixed weights use the rule for their heaviest component; for example, 2/h uses 2 and 4/h uses 4. Edit both the run speed and time per one core.</p>
+      <table class="rules"><thead><tr><th>Core weight</th><th>Run speed</th><th>Time / 1 core</th><th></th></tr></thead><tbody id="rules-body">
+        <tr class="rule-row"><td><input class="weight-rule" type="text" value="h" aria-label="Core weight"></td><td><input class="speed-rule" type="number" value="80"></td><td><input class="time-rule" type="number" step="0.1" value="1"></td><td><button class="remove-rule" type="button">Remove</button></td></tr>
+        <tr class="rule-row"><td><input class="weight-rule" type="text" value="1" aria-label="Core weight"></td><td><input class="speed-rule" type="number" value="45"></td><td><input class="time-rule" type="number" step="0.1" value="1"></td><td><button class="remove-rule" type="button">Remove</button></td></tr>
+        <tr class="rule-row"><td><input class="weight-rule" type="text" value="2" aria-label="Core weight"></td><td><input class="speed-rule" type="number" value="24"></td><td><input class="time-rule" type="number" step="0.1" value="1"></td><td><button class="remove-rule" type="button">Remove</button></td></tr>
+        <tr class="rule-row"><td><input class="weight-rule" type="text" value="3" aria-label="Core weight"></td><td><input class="speed-rule" type="number" value="15"></td><td><input class="time-rule" type="number" step="0.1" value="1"></td><td><button class="remove-rule" type="button">Remove</button></td></tr>
+        <tr class="rule-row"><td><input class="weight-rule" type="text" value="4" aria-label="Core weight"></td><td><input class="speed-rule" type="number" value="10"></td><td><input class="time-rule" type="number" step="0.1" value="1"></td><td><button class="remove-rule" type="button">Remove</button></td></tr>
+      </tbody></table><div class="actions"><button id="add-rule" type="button">Add core weight</button></div>
+    </section>
+
+    <section id="job-priorities" class="panel hidden" aria-labelledby="job-title">
+      <h2 id="job-title">Job priority adjustments</h2>
+      <p class="note">Add a positive or negative amount to prioritize a specific job. The same value can also be edited directly in Arranged data.</p>
+      <div class="table-wrap"><table class="data-table"><thead><tr><th>TN</th><th>WO</th><th class="num">Additional priority</th></tr></thead><tbody id="job-priority-body"></tbody></table></div>
+    </section>
+
+    <section id="results" class="panel hidden" aria-labelledby="results-title">
+      <h2 id="results-title">Arranged data</h2>
+      <div class="table-wrap"><table class="data-table"><thead id="head"></thead><tbody id="body"></tbody></table></div>
+    </section>
+  </main>
+  <script>
+    const state = { file: null, workbook: null, sheetName: '', headers: [], sourceRows: [], rows: [], groups: [], copper: '', speed: '', wo: '', tn: '', headerRow: 0, selectedDay: 'Monday', rowPriorities: {}, cores: '' };
+    const file = document.getElementById('file');
+    const directory = document.getElementById('directory');
+    const latestFile = document.getElementById('latest-file');
+    const refreshFile = document.getElementById('refresh-file');
+    const folderStatus = document.getElementById('folder-status');
+    const sheetSelect = document.getElementById('sheet-select');
+    const fileInfo = document.getElementById('file-info');
+    const status = document.getElementById('status');
+    const results = document.getElementById('results');
+    const download = document.getElementById('download');
+    const jobPriorities = document.getElementById('job-priorities');
+    const jobPriorityBody = document.getElementById('job-priority-body');
+    const normalize = value => String(value ?? '').toLowerCase().replace(/[^a-z0-9]/g, '');
+    const numeric = value => { const parsed = Number(String(value ?? '').replace(/[^0-9.-]/g, '')); return Number.isFinite(parsed) ? parsed : Number.POSITIVE_INFINITY; };
+    const setStatus = (message, error = false) => { status.textContent = message; status.className = error ? 'error' : ''; };
+    const matchColumn = (headers, choices) => headers.find(header => choices.includes(normalize(header)));
+    const rulesBody = document.getElementById('rules-body');
+    const rules = () => Object.fromEntries([...document.querySelectorAll('.rule-row')].map(row => {
+      const weight = row.querySelector('.weight-rule').value.trim().toLowerCase();
+      return [weight, { speed: Number(row.querySelector('.speed-rule').value), time: Number(row.querySelector('.time-rule').value) }];
+    }).filter(([weight]) => weight));
+    const coreParts = value => String(value ?? '').toLowerCase().split('/').map(part => part.trim()).filter(Boolean);
+    const coreRank = value => value === 'h' ? 0.5 : (Number.isFinite(Number(value)) ? Number(value) : 0);
+    const heaviestCore = value => coreParts(value).sort((a, b) => coreRank(b) - coreRank(a))[0] || '';
+    const targetSpeed = value => rules()[heaviestCore(value)]?.speed ?? '';
+    const timePerCore = value => rules()[heaviestCore(value)]?.time ?? '';
+    function wireRuleInputs() {
+      document.querySelectorAll('.weight-rule, .speed-rule, .time-rule').forEach(input => input.oninput = () => { if (state.rows.length) arrangeRows(); });
+      document.querySelectorAll('.remove-rule').forEach(button => button.onclick = () => { button.closest('.rule-row').remove(); if (state.rows.length) arrangeRows(); });
+    }
+    function addRule(weight = '', speed = '', time = 1) {
+      rulesBody.insertAdjacentHTML('beforeend', `<tr class="rule-row"><td><input class="weight-rule" type="text" value="${escapeHtml(weight)}" aria-label="Core weight"></td><td><input class="speed-rule" type="number" value="${escapeHtml(speed)}"></td><td><input class="time-rule" type="number" step="0.1" value="${escapeHtml(time)}"></td><td><button class="remove-rule" type="button">Remove</button></td></tr>`);
+      wireRuleInputs();
+    }
+    wireRuleInputs();
+    const addRuleButton = document.getElementById('add-rule');
+    if (addRuleButton) addRuleButton.addEventListener('click', () => addRule());
+    file.addEventListener('change', () => { if (file.files[0]) loadFile(file.files[0]); });
+    latestFile.addEventListener('click', loadLatestFile);
+    refreshFile.addEventListener('click', loadLatestFile);
+    sheetSelect.addEventListener('change', () => { state.sheetName = sheetSelect.value; prepareSheet(); });
+    document.querySelectorAll('[data-day]').forEach(button => button.addEventListener('click', () => {
+      state.selectedDay = button.dataset.day;
+      document.querySelectorAll('[data-day]').forEach(item => { const active = item === button; item.classList.toggle('is-selected', active); item.setAttribute('aria-pressed', String(active)); });
+      if (state.sourceRows.length) arrangeRows();
+    }));
+    document.getElementById('organize').addEventListener('click', () => {
+      if (!state.sourceRows.length) { setStatus('Choose a workbook with CopperWeight and Speed columns first.', true); return; }
+      arrangeRows();
+      setStatus(`Organized ${state.rows.length} row${state.rows.length === 1 ? '' : 's'} from “${state.sheetName}”.`);
+    });
+
+    async function loadLatestFile() {
+      const folderPath = directory.value.trim();
+      if (!folderPath) { folderStatus.textContent = 'Enter a folder path first.'; return; }
+      folderStatus.textContent = 'Finding the latest Excel file…';
+      try {
+        const response = await fetch(`/latest?directory=${encodeURIComponent(folderPath)}`);
+        if (!response.ok) throw new Error('Directory unavailable');
+        const name = response.headers.get('X-EZDES-Filename') || 'latest-excel-file.xlsx';
+        const modified = response.headers.get('X-EZDES-Modified') || String(Date.now());
+        const selected = new File([await response.blob()], name, { lastModified: Number(modified) });
+        folderStatus.textContent = `Using latest file: ${name}`;
+        loadFile(selected);
+      } catch { folderStatus.textContent = 'Unable to read that directory. Start EZDES with Run-EZDES.bat, then try again.'; }
+    }
+    function loadFile(selected) {
+      if (typeof XLSX === 'undefined') { setStatus('Excel support did not load. Refresh the page, confirm you are online, then try again.', true); return; }
+      const reader = new FileReader();
+      reader.onload = event => {
+        try {
+          state.file = selected;
+          state.workbook = XLSX.read(event.target.result, { type: 'array' });
+          sheetSelect.innerHTML = state.workbook.SheetNames.map(name => `<option value="${escapeHtml(name)}">${escapeHtml(name)}</option>`).join('');
+          state.sheetName = state.workbook.SheetNames[0];
+          document.getElementById('detail-file').textContent = selected.name;
+          document.getElementById('detail-modified').textContent = new Date(selected.lastModified).toLocaleString();
+          fileInfo.classList.remove('hidden');
+          prepareSheet();
+        } catch (error) { setStatus(error.message || 'Unable to read that workbook.', true); }
+      };
+      reader.readAsArrayBuffer(selected);
+    }
+    function prepareSheet() {
+      const sheet = state.workbook.Sheets[state.sheetName];
+      const matrix = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: false });
+      const headerIndex = matrix.findIndex(row => { const names = row.map(normalize); return names.includes('copperweight') && names.includes('speed'); });
+      if (headerIndex < 0) { state.sourceRows = []; document.getElementById('detail-header').textContent = 'Not found'; document.getElementById('detail-rows').textContent = '0'; setStatus('Could not find a header row containing CopperWeight and Speed.', true); return; }
+      const headers = matrix[headerIndex].map(value => String(value ?? '').trim());
+      const copper = matchColumn(headers, ['copperweight', 'copperwt', 'copper']);
+      const speed = matchColumn(headers, ['speed', 'runspeed', 'linespeed']);
+      const wo = matchColumn(headers, ['wo', 'workorder', 'workordernumber']);
+      const tn = matchColumn(headers, ['tn', 'ticketnumber', 'jobnumber']);
+      const cores = matchColumn(headers, ['cores', 'corecount', 'numberofcores']);
+      state.headers = headers; state.copper = copper; state.speed = speed; state.wo = wo; state.tn = tn; state.cores = cores; state.headerRow = headerIndex + 1;
+      state.sourceRows = matrix.slice(headerIndex + 1).filter(row => row.some(value => value !== '')).map(row => Object.fromEntries(headers.map((header, index) => [header, row[index] ?? ''])));
+      document.getElementById('detail-header').textContent = `Row ${state.headerRow}`;
+      document.getElementById('detail-rows').textContent = String(state.sourceRows.length);
+      setStatus(`Ready: found CopperWeight and Speed in row ${state.headerRow}.`);
+    }
+    function copperRank(value) { return coreRank(heaviestCore(value)); }
+    function priorityFor(value) {
+      const rank = copperRank(value);
+      const scores = { Monday: { 0.5: 100, 1: 80, 2: 60, 3: 40, 4: 20 }, Tuesday: { 0.5: 80, 1: 100, 2: 70, 3: 45, 4: 20 }, Wednesday: { 0.5: 45, 1: 80, 2: 100, 3: 100, 4: 60 }, Thursday: { 0.5: 15, 1: 45, 2: 75, 3: 100, 4: 90 }, Friday: { 0.5: 10, 1: 30, 2: 60, 3: 85, 4: 100 } };
+      return scores[state.selectedDay][rank] ?? 0;
+    }
+    function rowIndex(row) { return state.sourceRows.indexOf(row); }
+    function additionalPriority(row) { return Number(state.rowPriorities[rowIndex(row)] || 0); }
+    function coreCount(row) { const count = Number(row[state.cores]); return Number.isFinite(count) && count > 0 ? count : 1; }
+    function totalCoreTime(row) { return Number(timePerCore(row[state.copper])) * coreCount(row); }
+    function setAdditionalPriority(index, value) {
+      state.rowPriorities[index] = Number(value) || 0;
+      document.querySelectorAll(`[data-index="${index}"]`).forEach(input => { if (input.value !== String(state.rowPriorities[index])) input.value = state.rowPriorities[index]; });
+    }    function woGroup(row) {
+      const wo = String(row[state.wo] ?? '').trim();
+      const parts = wo.split('-').filter(Boolean);
+      return parts.length >= 2 ? `${parts[0]}-${parts[1]}` : (wo || 'No WO pattern');
+    }
+    function combinedPriority(row) { return priorityFor(row[state.copper]) + additionalPriority(row); }
+    function renderJobPriorityControls() {
+      jobPriorityBody.innerHTML = state.sourceRows.map((row, index) => `<tr><td>${escapeHtml(state.tn ? row[state.tn] : index + 1)}</td><td>${escapeHtml(row[state.wo] ?? '')}</td><td class="num"><input class="job-priority" data-index="${index}" type="number" step="1" value="${state.rowPriorities[index] || 0}" aria-label="Additional priority for job ${index + 1}"></td></tr>`).join('');
+      document.querySelectorAll('.job-priority').forEach(input => input.addEventListener('change', () => { setAdditionalPriority(input.dataset.index, input.value); if (state.rows.length) arrangeRows(); }));
+    }    function softlyGroupSimilarWO(rows) {
+      const pending = [...rows];
+      const arranged = [];
+      const lookAhead = 4;
+      while (pending.length) {
+        const current = pending.shift();
+        arranged.push(current);
+        const matchAt = pending.findIndex((candidate, index) => index < lookAhead && woGroup(candidate) === woGroup(current));
+        if (matchAt >= 0) arranged.push(pending.splice(matchAt, 1)[0]);
+      }
+      return arranged;
+    }
+    function arrangeRows() {
+      const count = Math.max(1, Number(document.getElementById('row-count').value) || 7);
+      const metricOrder = [...state.sourceRows.slice(0, count)].sort((a, b) => combinedPriority(b) - combinedPriority(a) || numeric(targetSpeed(a[state.copper])) - numeric(targetSpeed(b[state.copper])) || numeric(totalCoreTime(a)) - numeric(totalCoreTime(b)));
+      state.rows = softlyGroupSimilarWO(metricOrder);
+      render();
+    }
+    function render() {
+      document.getElementById('head').innerHTML = `<tr><th>#</th>${state.headers.map(header => `<th class="${header === state.copper || header === state.speed ? 'num' : ''}">${escapeHtml(header)}</th>`).join('')}<th class="num">Target speed</th><th class="num">Time / 1 core</th><th class="num">Total time</th><th class="num">Additional priority</th><th class="num">Priority<span class="internal-score">(internal scoring)</span></th></tr>`;
+      document.getElementById('body').innerHTML = state.rows.map((row, index) => `<tr><td class="rank">${index + 1}</td>${state.headers.map(header => `<td class="${header === state.copper || header === state.speed ? 'num' : ''}">${escapeHtml(row[header])}</td>`).join('')}<td class="num">${escapeHtml(targetSpeed(row[state.copper]))}</td><td class="num">${escapeHtml(timePerCore(row[state.copper]))}</td><td class="num">${escapeHtml(totalCoreTime(row))}</td><td class="num"><input class="inline-priority" data-index="${rowIndex(row)}" type="number" step="1" value="${additionalPriority(row)}" aria-label="Additional priority for arranged job ${index + 1}"></td><td class="num">${combinedPriority(row)}</td></tr>`).join('');
+      document.querySelectorAll('.inline-priority[data-index]').forEach(input => input.addEventListener('change', () => { setAdditionalPriority(input.dataset.index, input.value); arrangeRows(); }));
+      results.classList.remove('hidden'); download.classList.remove('hidden');
+    }
+    function escapeHtml(value) { const node = document.createElement('span'); node.textContent = value; return node.innerHTML; }
+    download.addEventListener('click', () => {
+      const arranged = state.rows.map(row => ({ ...row, 'WO Group': woGroup(row), 'Target Speed': targetSpeed(row[state.copper]), 'Time Per 1 Core': timePerCore(row[state.copper]), 'Cores': coreCount(row), 'Total Time': totalCoreTime(row), 'Additional Priority': additionalPriority(row), Priority: combinedPriority(row) }));
+      const audit = [
+        ['Audit field', 'Value'], ['Selected day', state.selectedDay], ['Source file', state.file?.name || ''], ['Source modified', state.file ? new Date(state.file.lastModified).toLocaleString() : ''], ['Worksheet', state.sheetName], ['Header row', state.headerRow], ['Processed rows', state.rows.length], [],
+        ['WO Group', 'CopperWeight', 'Source Speed', 'Target Speed', 'Time Per 1 Core', 'Cores', 'Total Time', 'Additional Priority', 'Priority'],
+        ...state.rows.map(row => [woGroup(row), row[state.copper], row[state.speed], targetSpeed(row[state.copper]), timePerCore(row[state.copper]), additionalPriority(row), combinedPriority(row)])
+      ];
+      const workbook = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(arranged, { header: [...state.headers, 'WO Group', 'Target Speed', 'Time Per 1 Core', 'Total Time', 'Additional Priority', 'Priority'] }), 'Arranged Data');
+      XLSX.utils.book_append_sheet(workbook, XLSX.utils.aoa_to_sheet(audit), 'Audit');
+      XLSX.writeFile(workbook, 'arranged-copper-speed.xlsx');
+    });
+  </script>
+</body>
+</html>

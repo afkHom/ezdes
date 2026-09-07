@@ -1,0 +1,12 @@
+services:
+  ezdes:
+    image: ghcr.io/afkhom/ezdes:latest
+    container_name: ezdes
+    ports:
+      - "8765:8765"
+    volumes:
+      # Change the left side to the folder on Zima that contains your Excel files.
+      - /DATA/Excel:/data:ro
+    environment:
+      EZDES_OPEN_BROWSER: "0"
+    restart: unless-stopped
