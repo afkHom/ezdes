@@ -1,12 +1,16 @@
 services:
   ezdes:
     image: ghcr.io/afkhom/ezdes:latest
+    pull_policy: always
     container_name: ezdes
     ports:
       - "8765:8765"
     volumes:
       # Change the left side to the folder on Zima that contains your Excel files.
       - /DATA/Excel:/data:ro
+      # Shared writable storage for speed-tracker entries.
+      - /DATA/AppData/ezdes:/state
     environment:
       EZDES_OPEN_BROWSER: "0"
+      EZDES_STATE_DIR: "/state"
     restart: unless-stopped

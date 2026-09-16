@@ -8,3 +8,5 @@ extend-to-100-items.mjs
 inspect-*.mjs
 update-speeds.mjs
 outputs/
+data/
+state/
