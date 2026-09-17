@@ -1,6 +1,7 @@
 services:
   ezdes:
     image: ghcr.io/afkhom/ezdes:latest
+    pull_policy: always
     container_name: ezdes
     ports:
       - "8765:8765"
