@@ -1,14 +1,11 @@
 services:
   ezdes:
-    image: ghcr.io/afkhom/ezdes:latest
-    pull_policy: always
+    build: .
     container_name: ezdes
     ports:
       - "8765:8765"
     volumes:
       - ${EZDES_DATA_DIR:-./data}:/data:ro
-      - ${EZDES_STATE_DIR:-./state}:/state
     environment:
       EZDES_OPEN_BROWSER: "0"
-      EZDES_STATE_DIR: "/state"
     restart: unless-stopped
