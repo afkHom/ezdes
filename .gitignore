@@ -9,3 +9,4 @@ inspect-*.mjs
 update-speeds.mjs
 outputs/
 data/
+state/
