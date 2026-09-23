@@ -1,0 +1,29 @@
+.learning-launch{bottom:118px}
+.learning-dialog{width:min(1220px,calc(100vw - 24px))}
+.learning-safety{padding:12px 14px;border:1px solid color-mix(in srgb,#0c8b5f 55%,Canvas);border-left:5px solid #0c8b5f;border-radius:9px;background:color-mix(in srgb,#0c8b5f 9%,Canvas);line-height:1.45}
+.learning-summary{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0}
+.learning-section>div{padding-bottom:15px!important}
+.learning-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:10px;margin-top:10px}
+.learning-form .wide{grid-column:span 2}
+.learning-actions{display:flex;align-items:end;gap:9px;flex-wrap:wrap;margin:12px 0}
+.learning-actions input{min-width:240px;flex:1}
+.learning-cards{display:grid;gap:10px}
+.learning-card{padding:13px;border:1px solid color-mix(in srgb,CanvasText 18%,Canvas);border-radius:10px;background:color-mix(in srgb,CanvasText 3%,Canvas)}
+.learning-card.approved{border-color:#0c8b5f;background:color-mix(in srgb,#0c8b5f 8%,Canvas)}
+.learning-card.rejected,.learning-card.hold{border-color:color-mix(in srgb,#b86b00 55%,Canvas)}
+.learning-card-head{display:flex;align-items:start;justify-content:space-between;gap:12px}
+.learning-card-head h3{margin:0 0 5px}
+.learning-card-head>strong{font-size:1.15rem;white-space:nowrap}
+.learning-badge{display:inline-block;padding:3px 7px;border-radius:999px;background:color-mix(in srgb,CanvasText 9%,Canvas);font-size:.75rem;font-weight:750}
+.learning-evidence{display:grid;grid-template-columns:repeat(4,minmax(110px,1fr));gap:8px;margin-top:12px}
+.learning-evidence span{padding:8px;border-radius:7px;background:color-mix(in srgb,CanvasText 5%,Canvas)}
+.learning-evidence b{display:block;font-size:1rem}
+.learning-card-actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}
+.learning-table{min-width:1120px}
+.learning-table th,.learning-table td{padding:8px 6px}
+.learning-result{display:inline-block;padding:3px 7px;border-radius:999px;text-transform:capitalize;font-size:.75rem;font-weight:750;background:color-mix(in srgb,CanvasText 9%,Canvas)}
+.learning-result.good{background:color-mix(in srgb,#0c8b5f 18%,Canvas);color:color-mix(in srgb,#0c8b5f 85%,CanvasText)}
+.learning-result.adjusted{background:color-mix(in srgb,#2c78df 16%,Canvas)}
+.learning-result.problem{background:color-mix(in srgb,#bd2020 16%,Canvas)}
+@media(max-width:700px){.learning-form .wide{grid-column:auto}.learning-evidence{grid-template-columns:1fr 1fr}.learning-card-head{display:block}.learning-card-head>strong{display:block;margin-top:9px}.learning-dialog{width:calc(100vw - 12px)}}
+@media print{.learning-launch,.learning-dialog{display:none!important}}
