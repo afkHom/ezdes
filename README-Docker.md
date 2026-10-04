@@ -1,32 +1,15 @@
-# EZDES Docker deployment
+# Local test deployment
 
-## Start the service
+This branch must be built from its own files. Pulling `ghcr.io/afkhom/ezdes:latest` would load production, not this local learning test build.
 
-1. Install Docker Engine or Docker Desktop on the server.
-2. In this folder, run:
+See [README-Local-Test.md](README-Local-Test.md) for local launch, Docker/Zima instructions, password configuration, persistence and backups.
 
-```powershell
-$env:EZDES_DATA_DIR = 'C:\\Production\\ExcelFiles'
-$env:EZDES_STATE_DIR = 'C:\\Production\\EZDES-State'
-docker compose up -d
+Set a strong `EZDES_PASSWORD` in your environment before starting. Docker connections require authentication even when the published port is localhost-only. Sign in using username `ezdes` and your password.
+
+```shell
+docker compose up -d --build
 ```
 
-3. Open `http://SERVER-IP:8765/copper-speed-organizer.html`.
-4. In EZDES, enter `/data` in **File directory**, then select **Use latest Excel file**.
+Open http://localhost:8777/copper-speed-organizer.html on the machine running Docker. Default compose is local-only and uses `ezdes-living-local`, so it will not replace the production container. Put workbooks in `data`, or configure the host `EZDES_DATA_DIR` before starting. Enter `/data` in EZDES's folder field.
 
-The host folder set in `EZDES_DATA_DIR` is mounted read-only at `/data`, so the container can choose the latest `.xlsx`, `.xls`, or `.csv` file without modifying it. `EZDES_STATE_DIR` is a separate writable folder containing the shared speed tracker. Keep that folder to preserve tracker entries across updates.
-
-When EZDES is opened through this server, speed-tracker entries are shared by every browser using that server. Opening the HTML file directly falls back to storage in that individual browser.
-
-## Stop the service
-
-```powershell
-docker compose down
-```
-
-## Update after changes
-
-```powershell
-docker compose pull
-docker compose up -d --force-recreate
-```
+The `state` volume stores `ezdes.sqlite3` and must be retained across rebuilds. Stop the container before copying it for backups.

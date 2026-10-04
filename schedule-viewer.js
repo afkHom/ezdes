@@ -2,8 +2,8 @@
   'use strict';
 
   const byId=id=>document.getElementById(id);
-  const esc=value=>{const node=document.createElement('span');node.textContent=value??'';return node.innerHTML};
-  const progressStorageKey='ezdes-schedule-viewer-progress-v1';
+  const esc=EZDES.escapeHtml;
+  const progressStorageKey='ezdes-schedule-viewer-progress-v2';
   const buildLabel=document.querySelector('h1 .note');
   if(buildLabel)buildLabel.textContent='testing build v2026.09.19';
 
@@ -23,7 +23,7 @@
         <div><label for="viewer-status">Show</label><select id="viewer-status"><option value="all">All scheduled work</option><option value="open">Not completed</option><option value="done">Completed</option></select></div>
         <button id="viewer-clear-progress" type="button">Clear completion marks</button>
       </div>
-      <div id="viewer-summary" class="viewer-summary" aria-live="polite"></div>
+      <p id="viewer-save-status" class="note" aria-live="polite"></p><div id="viewer-summary" class="viewer-summary" aria-live="polite"></div>
       <div id="viewer-list" class="viewer-list" aria-label="Generated schedule run sheet"></div>
       <section id="viewer-details" class="viewer-details" aria-live="polite"><p class="note">Select a layer to inspect its workbook information.</p></section>
     </div>`;
@@ -50,55 +50,19 @@
     return header?row[header]??'':'';
   }
 
-  function scheduleKey(){
-    const fileName=state.file?.name||'workbook';
-    return [fileName,state.sheetName||'sheet',state.headers.join('|')].join('::');
-  }
+  function scheduleKey(){return EZDES.workbookKey(state)}
 
-  function allProgress(){
-    try{return JSON.parse(localStorage.getItem(progressStorageKey)||'{}')}catch{return {}}
-  }
+  function allProgress(){const saved=JSON.parse(localStorage.getItem(progressStorageKey)||'{}');if(!saved||Array.isArray(saved)||typeof saved!=='object')throw Error('Saved completion history is damaged. Restore a backup before saving.');return saved}
 
   function readProgress(){
     return allProgress()[scheduleKey()]||{};
   }
 
-  function writeProgress(progress){
-    try{
-      const saved=allProgress();
-      saved[scheduleKey()]=progress;
-      localStorage.setItem(progressStorageKey,JSON.stringify(saved));
-    }catch{}
-  }
+  function writeProgress(progress){try{const saved=allProgress();saved[scheduleKey()]=progress;localStorage.setItem(progressStorageKey,JSON.stringify(saved));byId('viewer-save-status').textContent='Completion marks saved in this browser.';return true}catch(error){byId('viewer-save-status').textContent='Not saved: '+error.message;return false}}
 
-  function layerKey(entry){
-    return `${entry.job}::${idFor(entry.row)}`;
-  }
+  function layerKey(entry){return EZDES.rowKey(entry.row,state.sourceRows)}
 
-  function makeEntries(){
-    let elapsed=0;
-    let previous=null;
-    const setup=Math.max(0,Number(byId('setup-minutes').value)||0)/60;
-    const startTime=byId('schedule-start').value;
-    return state.rows.map((row,index)=>{
-      const duration=Math.max(0,scheduledHours(row,previous));
-      const changeover=previous&&needsChangeover(row,previous)?setup:0;
-      const startHours=elapsed;
-      const totalHours=duration+changeover;
-      elapsed+=totalHours;
-      const entry={
-        index,row,startHours,duration,changeover,totalHours,
-        start:timeAdd(startTime,startHours),finish:timeAdd(startTime,elapsed),
-        job:jobKey(row),tn:field(row,'tn'),wo:field(row,'wo'),
-        weight:field(row,'copper'),speed:field(row,'speed'),
-        cores:field(row,'cores'),target:target(row),
-        note:state.jobNotes[jobKey(row)]||''
-      };
-      entry.searchable=[entry.job,entry.tn,entry.wo,entry.weight,entry.speed,entry.target,...Object.values(row)].join(' ').toLowerCase();
-      previous=row;
-      return entry;
-    });
-  }
+  function makeEntries(){return scheduleTimeline().map(line=>{const {row,index}=line,entry={...line,job:jobKey(row),tn:field(row,'tn'),wo:field(row,'wo'),weight:field(row,'copper'),speed:field(row,'speed'),cores:field(row,'cores'),target:target(row),note:state.jobNotes[jobKey(row)]||''};entry.searchable=[entry.job,entry.tn,entry.wo,entry.weight,entry.speed,entry.target,...Object.values(row)].join(' ').toLowerCase();return entry})}
 
   function groupedEntries(){
     const groups=[];
@@ -129,15 +93,13 @@
   function setLayerDone(entry,done){
     const progress=readProgress();
     if(done)progress[layerKey(entry)]=true;else delete progress[layerKey(entry)];
-    writeProgress(progress);
-    renderViewer();
+    if(writeProgress(progress))renderViewer();
   }
 
   function setJobDone(group,done){
     const progress=readProgress();
     group.entries.forEach(entry=>{if(done)progress[layerKey(entry)]=true;else delete progress[layerKey(entry)]});
-    writeProgress(progress);
-    renderViewer();
+    if(writeProgress(progress))renderViewer();
   }
 
   function showDetails(index){
@@ -166,6 +128,14 @@
   }
 
   function renderViewer(){
+    try{renderViewerContents()}catch(error){
+      byId('viewer-save-status').textContent='Completion history could not load: '+error.message;
+      list.innerHTML='<div class="viewer-empty">Restore completion history before making changes.</div>';
+      summary.textContent='';
+    }
+  }
+
+  function renderViewerContents(){
     entries=makeEntries();
     const progress=readProgress();
     const query=search.value.trim().toLowerCase();
@@ -221,11 +191,12 @@
     });
     document.querySelectorAll('.viewer-layer-main').forEach(button=>button.onclick=()=>showDetails(Number(button.dataset.index)));
     document.querySelectorAll('.viewer-layer').forEach(row=>row.onkeydown=event=>{
-      if(!['ArrowUp','ArrowDown','Home','End',' ','Enter'].includes(event.key))return;
+      if(event.target!==row||!['ArrowUp','ArrowDown','Home','End',' ','Enter'].includes(event.key))return;
       event.preventDefault();
       if(event.key===' '||event.key==='Enter'){
         const entry=entries[Number(row.dataset.index)];
         setLayerDone(entry,!isDone(entry));
+        document.querySelector('.viewer-layer[data-index="'+entry.index+'"]')?.focus();
         return;
       }
       const rows=[...document.querySelectorAll('.viewer-layer')];
@@ -249,7 +220,7 @@
   byId('viewer-clear-progress').onclick=()=>{
     if(!entries.length)return;
     if(!confirm('Clear all completion marks for this workbook schedule?'))return;
-    writeProgress({});
+    if(!writeProgress({}))return;
     selectedIndex=null;
     renderViewer();
   };

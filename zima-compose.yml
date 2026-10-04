@@ -1,10 +1,11 @@
 services:
   ezdes:
-    image: ghcr.io/afkhom/ezdes:latest
-    pull_policy: always
-    container_name: ezdes
+    # Build this local branch before using this compose file on Zima.
+    image: ezdes-living-local:test
+    pull_policy: never
+    container_name: ezdes-living-local
     ports:
-      - "8765:8765"
+      - "8777:8765"
     volumes:
       # Change the left side to the folder on Zima that contains your Excel files.
       - /DATA/Excel:/data:ro
@@ -13,4 +14,7 @@ services:
     environment:
       EZDES_OPEN_BROWSER: "0"
       EZDES_STATE_DIR: "/state"
+      EZDES_DATA_DIR: "/data"
+      # Set in your environment; network access stays blocked without a password.
+      EZDES_PASSWORD: "${EZDES_PASSWORD:?Set an EZDES_PASSWORD for network access}"
     restart: unless-stopped
