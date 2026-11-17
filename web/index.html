@@ -1,0 +1,218 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>EZDES</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="vendor/xlsx.full.min.js" defer></script>
+  <script src="engine.js" defer></script>
+  <script src="store.js" defer></script>
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div>
+      <h1>EZDES</h1>
+      <p class="tagline">Plan production jobs by copperweight, time and shift capacity.</p>
+    </div>
+    <button id="help-open" type="button">Help</button>
+  </header>
+
+  <div class="layout">
+    <aside class="setup" aria-label="Schedule setup">
+      <section class="card">
+        <h2><span class="step">1</span> Workbook</h2>
+        <div id="server-source" hidden>
+          <button id="load-latest" class="primary wide" type="button">Load latest from shared folder</button>
+          <p id="server-latest" class="hint"></p>
+        </div>
+        <label id="drop-zone" class="drop-zone" for="file">
+          <strong>Choose a workbook</strong>
+          <span class="hint">or drop a .xlsx, .xls or .csv file here</span>
+        </label>
+        <input id="file" class="visually-hidden" type="file" accept=".xlsx,.xlsm,.xls,.csv">
+        <label id="sheet-row" class="field" hidden>Worksheet <select id="sheet"></select></label>
+        <p id="source-status" class="hint" role="status">No workbook loaded.</p>
+      </section>
+
+      <section id="mapping-card" class="card" hidden>
+        <h2><span class="step">2</span> Columns</h2>
+        <p class="hint">Detected automatically and remembered for this layout. Only Copperweight is required.</p>
+        <div id="mapping" class="field-grid"></div>
+      </section>
+
+      <section class="card">
+        <h2><span class="step">3</span> Day and shift</h2>
+        <div id="days" class="segmented" role="radiogroup" aria-label="Production day"></div>
+        <div class="field-grid">
+          <label class="field">Production date <input id="planDate" type="date"></label>
+          <label class="field">Due dates
+            <select id="dueWeight" data-setting="dueWeight">
+              <option value="off">Ignore</option>
+              <option value="normal">Normal priority</option>
+              <option value="strong">Strong priority</option>
+            </select>
+          </label>
+        </div>
+        <div class="field-grid">
+          <label class="field">Shift hours <input id="shiftHours" data-setting="shiftHours" type="number" min="0.25" step="0.25"></label>
+          <label class="field">Shift starts <input id="startTime" data-setting="startTime" type="time"></label>
+          <label class="field" title="The line stops for breaks, so they come off the shift.">Breaks (min) <input id="breakMinutes" data-setting="breakMinutes" type="number" min="0" step="5"></label>
+          <label class="field">Setup per job (min) <input id="setupMinutes" data-setting="setupMinutes" type="number" min="0" step="1"></label>
+          <label class="field" title="Setting the diverters when a run of bottom-image cores (lighter side not clear) starts. Image cores are kept together so this is paid once per run.">Bottom image setup (min) <input id="imageChangeMinutes" data-setting="imageChangeMinutes" type="number" min="0" step="1"></label>
+          <label class="field" title="Only the act of changing the speed setting once the line is clear. The wait for the line to clear is worked out per change from the weights and the direction.">Change speed setting (min) <input id="speedChangeMinutes" data-setting="speedChangeMinutes" type="number" min="0" step="1"></label>
+          <label class="field" title="Before slowing down, how far through the line the last core must be (as % of its travel). 100 = fully out, so a light core is never stuck at a slow speed.">Slow down: last core at (% of line) <input id="clearDownPercent" data-setting="clearDownPercent" type="number" min="0" max="100" step="5"></label>
+          <label class="field" title="Before speeding up, how far through the line the last core must be (as % of its travel). 50 = out of the etcher when the etcher is the second quarter of the line.">Speed up: last core at (% of line) <input id="clearUpPercent" data-setting="clearUpPercent" type="number" min="0" max="100" step="5"></label>
+        </div>
+        <div class="field-grid">
+          <label class="radio" title="At shift change the running machine is handed over, so the last job may run into the next shift's list."><input id="runOn" data-setting="runOn" type="checkbox"> Next shift continues the line (last job may run on)</label>
+          <label class="field" title="Starting on the weight that is already running saves its first-core travel and a speed change.">On the machine now <select id="runningWeight" data-setting="runningWeight"></select></label>
+        </div>
+        <fieldset class="mode">
+          <legend>Jobs to schedule</legend>
+          <label class="radio"><input type="radio" name="mode" value="fill"> Fill the shift</label>
+          <label class="radio"><input type="radio" name="mode" value="count"> Top
+            <input id="jobLimit" data-setting="jobLimit" class="inline-number" type="number" min="1" step="1" aria-label="Number of jobs"> jobs</label>
+        </fieldset>
+      </section>
+
+      <details class="card">
+        <summary><h2>Core-weight rules</h2></summary>
+        <p class="hint">First core = minutes for a core to travel the whole line at that speed. Next core = seconds between cores (the conveyor sets the gap). Mixed weights use their heaviest part.</p>
+        <div class="field-grid">
+          <label class="field" title="If you measure the line, enter its length in the same distance unit the speed uses per minute. First-core minutes are then length ÷ speed for every weight. Leave blank to type them.">Line length (speed units) <input id="lineLength" data-setting="lineLength" type="number" min="0" step="any" placeholder="blank = typed"></label>
+          <label class="field" title="Distance from one core's leading edge to the next on the conveyor. Next-core seconds are then pitch ÷ speed. Leave blank to type them.">Core pitch (speed units) <input id="corePitch" data-setting="corePitch" type="number" min="0" step="any" placeholder="blank = typed"></label>
+        </div>
+        <table class="rules">
+          <thead><tr><th>Weight</th><th>Speed</th><th>First core (min)</th><th>Next core (s)</th><th><span class="visually-hidden">Remove</span></th></tr></thead>
+          <tbody id="rules"></tbody>
+        </table>
+        <div class="row">
+          <button id="add-rule" type="button">Add weight</button>
+          <button id="reset-rules" type="button">Restore defaults</button>
+        </div>
+        <h3 class="sub-h">Changing the speed setting (min)</h3>
+        <p class="hint">Only the act of changing the setting, once the line is clear. Blank cells use “Change speed setting” above; fill in the pairs that take longer.</p>
+        <table id="speed-matrix" class="rules day-scores"></table>
+        <div class="row"><button id="clear-speed-matrix" type="button">Clear table</button></div>
+      </details>
+
+      <details class="card">
+        <summary><h2>Day scores</h2></summary>
+        <p class="hint">How strongly each day favours each weight when choosing which jobs go into the shift. Higher wins. Due dates and waiting time are added on top. The order inside the shift is still the fastest one.</p>
+        <table id="day-scores" class="rules day-scores"></table>
+        <div class="row">
+          <button id="reset-day-scores" type="button">Restore defaults</button>
+        </div>
+      </details>
+
+      <details class="card">
+        <summary><h2>Presets</h2></summary>
+        <p class="hint">Saves day, shift, rules and column mapping in this browser.</p>
+        <form id="preset-form" class="row">
+          <input id="preset-name" type="text" placeholder="Preset name" aria-label="Preset name" required>
+          <button type="submit">Save</button>
+        </form>
+        <ul id="presets" class="preset-list"></ul>
+      </details>
+    </aside>
+
+    <main class="board">
+      <div id="empty" class="empty">
+        <h2>No schedule yet</h2>
+        <p>Load a workbook on the left. The schedule builds itself and updates as you change settings.</p>
+      </div>
+
+      <div id="board" hidden>
+        <h2 id="print-title" class="print-only"></h2>
+        <p id="start-note" class="start-note" role="status"></p>
+        <section id="summary" class="summary" aria-label="Schedule summary"></section>
+        <details id="checks" class="checks"><summary></summary><ul></ul></details>
+
+        <div class="toolbar">
+          <input id="search" type="search" placeholder="Filter by WO, TN or any value" aria-label="Filter schedule">
+          <div class="row">
+            <button id="undo" type="button" disabled>Undo</button>
+            <button id="redo" type="button" disabled>Redo</button>
+            <button id="reset-order" type="button" disabled>Reset order</button>
+            <label class="radio" title="Adds an empty column to the printout for operators who write down actual times."><input id="printActuals" data-setting="printActuals" type="checkbox"> Blank “Actual” column when printing</label>
+            <button id="print" type="button">Print</button>
+            <button id="export" class="primary" type="button">Export Excel</button>
+          </div>
+        </div>
+
+        <div class="table-wrap">
+          <table class="schedule">
+            <thead id="thead"></thead>
+            <tbody id="tbody"></tbody>
+          </table>
+        </div>
+        <p class="hint screen-only">Drag a row by ⠿, or focus it and press ↑ / ↓, to move the whole job. Moves stick until Reset order.</p>
+      </div>
+    </main>
+  </div>
+
+  <dialog id="note-dialog" aria-labelledby="note-title">
+    <form method="dialog">
+      <h2 id="note-title">Job note</h2>
+      <p class="hint">Prints under the job. Notes follow the job into future workbooks.</p>
+      <textarea id="note-text" rows="5"></textarea>
+      <div class="row end">
+        <button value="cancel" type="submit">Cancel</button>
+        <button value="save" class="primary" type="submit">Save note</button>
+      </div>
+    </form>
+  </dialog>
+
+  <dialog id="help-dialog" aria-labelledby="help-title">
+    <div class="dialog-head"><h2 id="help-title">How EZDES plans a shift</h2><form method="dialog"><button>Close</button></form></div>
+    <div class="dialog-body">
+      <h3>Workflow</h3>
+      <ol>
+        <li>Load a workbook (or the newest file from the shared folder when running on the server).</li>
+        <li>Check the detected columns. Only Copperweight is required; WO, TN and cores improve the plan.</li>
+        <li>Pick the day, shift and either “Fill the shift” or a fixed number of jobs. The schedule rebuilds as you go.</li>
+        <li>Adjust order, pin jobs, add notes, then print or export.</li>
+      </ol>
+      <h3>Jobs</h3>
+      <p>WO 174-05-01 and 174-05-08 are one job (174-05). A job is scheduled whole so it finishes the same day. With “Next shift continues the line” ticked, the last job may run into the next shift's list; it is marked “Next shift”, and the planner prefers one at the speed the shift ends on. Lines without a WO use TN, then their own row.</p>
+      <p>The workbook lists whole orders even when part of one has run. Tick <b>Done</b> on cores that are finished: they drop out of the plan, are listed under it, and stay ticked when the same core appears in later workbooks.</p>
+      <h3>Ordering</h3>
+      <ul>
+        <li><b>Which jobs make the shift</b> is decided by score. Each weight gets a day score: by default Monday favours light weights, Wednesday is balanced and Friday favours heavy ones. Edit them under “Day scores”. Due dates and waiting time add to it.</li>
+        <li><b>Waiting:</b> every production day since a job first appeared in a loaded workbook adds +10, up to +100. A light job squeezed out on Thursday therefore climbs until it gets in. The first-seen dates are kept in this browser.</li>
+        <li><b>The order inside the shift</b> is the fastest one. Every order of the weight blocks is tried; usually that means fast → slow (h → 1 → 2 → 3 → 4), because speeding up means waiting for the line to clear. Jobs due today or overdue are the exception: each hour they would wait costs their urgency points in minutes, so they move to the front unless that costs a lot more time. Lines run one weight/speed block at a time; inside a block each job's lines stay together, most urgent job first.</li>
+        <li>The summary shows how many minutes that order saves compared with running in day-score order.</li>
+        <li>A job with lines in two weights runs last in the first block and first in the next, so it doesn't stop and set up again.</li>
+        <li>“On the machine now” is the weight running when the shift starts. By default (Auto) it's where the latest earlier plan in this browser ended; a note above the plan says which. Pick a weight or “Nothing” if the machine isn't where the plan left it. It goes back to Auto when you change the day or date.</li>
+        <li>With “Fill the shift”, jobs are added in score order while they fit, then any time the ordering saved is offered to the jobs left out.</li>
+        <li>Pinned jobs always go first and are always included. Manual moves are kept until you reset the order.</li>
+        <li>A job with a line that has no core-weight rule is left out (and listed in Data checks) instead of being timed as 0 minutes.</li>
+      </ul>
+      <h3>Due dates</h3>
+      <ul>
+        <li>Map a Due date column to use them. A job counts as due on its earliest line's date, compared with the production date.</li>
+        <li>Urgency counts production days (Mon–Fri): planning Friday, a job due Monday is due the next work day, and one due Saturday is due today.</li>
+        <li>Long jobs start earlier. A job that needs 2 shifts and is due the next work day scores as due today.</li>
+        <li>Urgency points: overdue +100, due that day +80, next work day +50, within 3 work days +25, within 7 +10. Overdue always beats the day's weight preference. “Strong priority” doubles the points; “Ignore” turns them off.</li>
+        <li>Urgent jobs are picked first. Jobs due today or overdue also run early in the shift; weight blocks are never split for them.</li>
+        <li>Dates like 2026-11-16, 11/16/2026 and 16 Nov 2026 are understood. Slashed dates are read month-first unless the first number is over 12.</li>
+        <li>If a job due today or earlier doesn't fit the shift, the summary says so.</li>
+      </ul>
+      <h3>Timing</h3>
+      <ul>
+        <li>The clock is the loader's. The conveyor sets the gap, so a line of n cores takes n × “next core” seconds to feed. “Load” is when its first core goes on; “Out” is when its last core comes out, one travel time later.</li>
+        <li>At a speed change the next weight can't be fed until the last core is far enough through: fully out when slowing down (a light core stuck at a slow speed is ruined), out of the etcher when speeding up. Those waits are the two “last core at (% of line)” settings, plus the minutes to change the setting itself: one default, or a per-pair number in the “Changing the speed setting” table under Core-weight rules. The order search counts them, so it finds the quickest direction on its own.</li>
+        <li>Setup minutes are added whenever a new job starts (0 if a WO/TN change costs nothing).</li>
+        <li>A job that runs a little off its weight's usual speed (the sheet's Speed column) is its own speed block, so the line clears before and after it even if the speeds are only 2 apart.</li>
+        <li>If you measure the line, enter its length and the core pitch under Core-weight rules: travel and interval are then computed from each speed instead of typed.</li>
+        <li>Mixed cores (e.g. 1/2) run at the heavier side's speed. Mark one “Bottom image” when the lighter side isn't clear: setting the diverters costs “Bottom image setup” minutes when a run of image cores starts. Image cores are kept together, and carried across a weight change when possible, so this is paid as few times as possible.</li>
+        <li>Breaks come off the shift length.</li>
+      </ul>
+      <h3>Storage</h3>
+      <p>Settings, presets, notes, pins and manual order live in this browser only.</p>
+    </div>
+  </dialog>
+</body>
+</html>

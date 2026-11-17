@@ -1,3 +1,5 @@
+# Build from this folder:   EZDES_DATA_DIR=/path/to/workbooks docker compose up -d --build
+# To use the published image instead, see zima-compose.yml.
 services:
   ezdes:
     build: .
@@ -5,7 +7,5 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      - ${EZDES_DATA_DIR:-./data}:/data:ro
-    environment:
-      EZDES_OPEN_BROWSER: "0"
+      - ${EZDES_DATA_DIR:-./sample-data}:/data:ro
     restart: unless-stopped

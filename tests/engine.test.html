@@ -1,0 +1,498 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>EZDES engine tests</title>
+  <style>
+    body { font: 14px system-ui, sans-serif; margin: 20px; background: #fff; color: #111; }
+    .pass { color: #0a7a52; } .fail { color: #b42318; font-weight: 700; }
+    pre { margin: 2px 0 8px 20px; color: #b42318; }
+  </style>
+  <!-- Serve the repository root (python -m http.server) and open /tests/engine.test.html -->
+  <script src="../web/engine.js"></script>
+</head>
+<body>
+  <h1 id="summary">Running…</h1>
+  <ol id="results"></ol>
+  <script>
+    const E = window.EzdesEngine;
+    const results = [];
+    function test(name, fn) {
+      try { fn(); results.push({ name, ok: true }); } catch (e) { results.push({ name, ok: false, error: e.message }); }
+    }
+    function eq(actual, expected, label = '') {
+      const a = JSON.stringify(actual), b = JSON.stringify(expected);
+      if (a !== b) throw new Error(`${label} expected ${b}, got ${a}`);
+    }
+    function ok(cond, label) { if (!cond) throw new Error(label); }
+
+    const mapping = { copper: 'Cu', wo: 'WO', tn: 'TN', cores: 'Cores', due: 'Due' };
+    const settings = (over = {}) => ({
+      rules: E.DEFAULT_RULES, day: 'Monday', shiftHours: 8, startTime: '07:00',
+      setupMinutes: 5, speedChangeMinutes: 10, fillShift: false, jobLimit: 0, ...over,
+    });
+    const lines = (rows) => E.buildLines(rows.map(([WO, Cu, Cores, TN = '', Due = ''], i) => ({ sheetRow: i + 2, values: { WO, Cu, Cores, TN, Due } })), mapping);
+    const order = (result) => result.lines.map((l) => l.wo);
+
+    test('parseSheet finds a header below title rows, dedupes names, skips blank rows', () => {
+      const sheet = E.parseSheet([
+        ['Production report'], [],
+        ['WO', 'Copperweight', 'Cores', 'Copperweight', ''],
+        ['1-2-3', '1', '3', 'x', ''],
+        ['', '', '', '', ''],
+        ['1-2-4', '2', '1,200', 'y', 'z'],
+      ]);
+      eq(sheet.headerRow, 3, 'headerRow');
+      eq(sheet.headers, ['WO', 'Copperweight', 'Cores', 'Copperweight (2)', 'Column 5'], 'headers');
+      eq(sheet.records.map((r) => r.sheetRow), [4, 6], 'sheet rows');
+      const map = E.autoMap(sheet.headers);
+      eq(map, { copper: 'Copperweight', wo: 'WO', tn: '', cores: 'Cores', due: '', speed: '' }, 'autoMap');
+      const built = E.buildLines(sheet.records, map);
+      eq(built.map((l) => l.job), ['WO 1-2', 'WO 1-2'], 'job keys');
+      eq(built[1].cores, 1200, 'thousands separator');
+    });
+
+    test('parseSheet returns null without a Copperweight header', () => {
+      eq(E.parseSheet([['a', 'b'], [1, 2]]), null);
+    });
+
+    test('buildLines: mixed weights, heaviest part, stable unique uids', () => {
+      const l = lines([['5-1-1', '1 / 2', 2], ['5-1-1', '1/2', 2], ['', '2/2', 1, 'T9'], ['', 'h', 1]]);
+      eq(l.map((x) => x.copper), ['1/2', '1/2', '2/2', 'h']);
+      eq(l.map((x) => x.mixed), [true, true, false, false]);
+      eq(l.map((x) => x.heavy), ['2', '2', '2', 'h']);
+      eq(l.map((x) => x.job), ['WO 5-1', 'WO 5-1', 'TN T9', 'Row 5']);
+      ok(l[0].uid !== l[1].uid, 'duplicate lines get distinct uids');
+      eq(lines([['5-1-1', '1/2', 2]])[0].uid, l[0].uid, 'uid does not depend on row position');
+    });
+
+    test('day score picks the shift: Monday light, Friday heavy; order inside is the quickest', () => {
+      const l = lines([['20-1', '4', 1], ['10-1', 'h', 1]]);
+      eq(order(E.buildSchedule(l, settings({ jobLimit: 1 }), {}, mapping)), ['10-1'], 'Monday picks light');
+      eq(order(E.buildSchedule(l, settings({ day: 'Friday', jobLimit: 1 }), {}, mapping)), ['20-1'], 'Friday picks heavy');
+      // Both fit: 4 then h only waits for the etcher to clear (15 min) and ends on h's short travel;
+      // h then 4 waits for h to be fully out and ends on 4's 30 min travel. Same answer on any day.
+      eq(order(E.buildSchedule(l, settings({ day: 'Friday' }), {}, mapping)), ['20-1', '10-1'], 'Friday');
+      eq(order(E.buildSchedule(l, settings(), {}, mapping)), ['20-1', '10-1'], 'Monday too');
+    });
+
+    test('weights outside the day table use the nearest rank instead of 0', () => {
+      eq(E.dayScore('Monday', 5), 20);
+      eq(E.dayScore('Friday', 0), 10);
+    });
+
+    test('timing: first-core travel, same-weight carry-on, setup, speed changeover', () => {
+      const l = lines([['1-1-1', '1', 3], ['1-1-2', '1', 2], ['2-2', '2', 1]]);
+      const r = E.buildSchedule(l, settings(), {}, mapping);
+      // 2 first, then speeding up to 1 only waits for the etcher (10 + 10 − 0.83 = 19.17 min); the
+      // other way round waits for the 1 cores to be fully out (15 + 10 − 0.25) and ends on 2's travel.
+      eq(order(r), ['2-2', '1-1-2', '1-1-1']);
+      eq(r.lines.map((x) => Number(x.minutes.toFixed(2))), [5.83, 24.67, 0.75], 'loader minutes incl. setup and waits');
+      eq(r.lines.map((x) => Number(x.outMinute.toFixed(2))), [25, 45.25, 46], 'last core out');
+      eq(r.lines.map((x) => x.jobStart), [true, true, false], 'job starts');
+      eq(r.lines.map((x) => x.jobEnd), [true, false, true], 'job ends');
+      eq(r.stats.plannedMinutes, 46);
+      eq(r.stats.speedChanges, 1);
+      eq(r.stats.configChanges, 1);
+    });
+
+    test('job limit never splits a job', () => {
+      const l = lines([['1-1-1', '1', 3], ['1-1-2', '1', 2], ['2-2', '2', 1]]);
+      const r = E.buildSchedule(l, settings({ jobLimit: 1 }), {}, mapping);
+      eq(order(r).slice().sort(), ['1-1-1', '1-1-2']);
+      eq([r.stats.scheduledJobs, r.stats.totalJobs], [1, 2]);
+    });
+
+    test('fill shift skips jobs that do not fit and keeps looking', () => {
+      const l = lines([['1-1-1', '1', 3], ['1-1-2', '1', 2], ['2-2', '2', 1], ['3-3', '1', 1]]);
+      const r = E.buildSchedule(l, settings({ fillShift: true, shiftHours: 0.5 }), {}, mapping);
+      eq(r.jobOrder.slice().sort(), ['WO 1-1', 'WO 3-3']);
+      ok(r.stats.plannedMinutes <= 30, `fits shift (${r.stats.plannedMinutes})`);
+      eq(r.stats.overMinutes, 0);
+    });
+
+    test('fill shift still schedules one oversized job and flags it', () => {
+      const l = lines([['2-2', '2', 1]]);
+      const r = E.buildSchedule(l, settings({ fillShift: true, shiftHours: 0.1 }), {}, mapping);
+      eq(r.stats.scheduledJobs, 1);
+      ok(r.stats.overMinutes > 0, 'over capacity');
+    });
+
+    test('pins go first; manual order applies and ignores stale uids', () => {
+      const l = lines([['20-1', '4', 1], ['10-1', 'h', 1], ['30-1', '1', 1]]);
+      eq(order(E.buildSchedule(l, settings(), { pins: ['WO 20-1'] }, mapping))[0], '20-1', 'pinned first');
+      const uid = (wo) => l.find((x) => x.wo === wo).uid;
+      const manual = ['stale#1', uid('30-1'), uid('20-1')];
+      eq(order(E.buildSchedule(l, settings(), { manualOrder: manual }, mapping)), ['30-1', '20-1', '10-1'], 'manual');
+      eq(order(E.buildSchedule(l, settings(), { manualOrder: manual, pins: ['WO 10-1'] }, mapping))[0], '10-1', 'pin beats manual');
+    });
+
+    test('bottom image: diverter setup has its own cost, independent of job setup', () => {
+      const l = lines([['5-1-1', '1', 1], ['5-1-2', '1/2', 1]]);
+      const mixedLine = (r) => r.lines.find((x) => x.wo === '5-1-2');
+      const plain = mixedLine(E.buildSchedule(l, settings(), {}, mapping));
+      const image = mixedLine(E.buildSchedule(l, settings({ setupMinutes: 0, imageChangeMinutes: 12 }), { bottomImage: [l[1].uid] }, mapping));
+      eq([plain.imageChangeover, plain.imageChangeMinutes], [false, 0], 'clear bottom costs nothing');
+      eq([image.imageChangeover, image.imageChangeMinutes, image.setupMinutes], [true, 12, 0], 'image bottom sets diverters');
+      ok(E.explain(image).includes('12 min setting diverters'), E.explain(image));
+    });
+
+    test('bottom-image cores are bunched so the diverters are set once', () => {
+      // Three jobs in weight 2: clear, image, clear, image (as listed). Run order bunches the images.
+      const l = lines([['1-1', '1/2', 1], ['2-1', '1/2', 1], ['3-1', '2', 1], ['4-1', '1/2', 1]]);
+      const image = [l[1].uid, l[3].uid];
+      const r = E.buildSchedule(l, settings({ setupMinutes: 0, imageChangeMinutes: 10 }), { bottomImage: image }, mapping);
+      const flags = r.lines.map((x) => x.bottomImage);
+      eq(flags, [false, false, true, true], `order ${order(r)}`);
+      eq(r.lines.filter((x) => x.imageChangeover).length, 1, 'one diverter setup');
+    });
+
+    test('bottom-image run carries across a weight change when it can', () => {
+      // Monday: 1-block then 2-block. Image cores sit at the end of one and the start of the next.
+      const l = lines([['1-1', 'h/1', 1], ['2-1', '1', 1], ['3-1', '1/2', 1], ['4-1', '2', 1]]);
+      const r = E.buildSchedule(l, settings({ setupMinutes: 0, imageChangeMinutes: 10 }), { bottomImage: [l[0].uid, l[2].uid] }, mapping);
+      eq(r.lines.map((x) => x.bottomImage), [false, true, true, false], `order ${order(r)}`);
+      eq(r.lines.filter((x) => x.imageChangeover).length, 1, 'diverters set once');
+    });
+
+    test('breaks come off the shift', () => {
+      const l = lines([['1-1', '1', 1]]);
+      const r = E.buildSchedule(l, settings({ shiftHours: 8, breakMinutes: 45 }), {}, mapping);
+      eq([r.stats.capacityMinutes, r.stats.breakMinutes], [435, 45]);
+    });
+
+    test('day scores can be edited; no workload bonus', () => {
+      const l = lines([['10-1', 'h', 1], ['20-1', '4', 1], ['21-1', '4', 1], ['22-1', '4', 1]]);
+      const r = E.buildSchedule(l, settings(), {}, mapping);
+      eq(r.lines.find((x) => x.wo === '20-1').priority, 20, 'Monday weight 4 = 20, no bonus for 3 jobs');
+      const edited = { Monday: { 0.5: 5, 4: 90 } };
+      const pick = E.buildSchedule(l, settings({ jobLimit: 1, dayScores: edited }), {}, mapping);
+      eq(pick.lines[0].heavy, '4', 'edited table makes Monday pick weight 4');
+      eq(E.dayScore('Monday', 2, edited), 60, 'cells not edited keep their default');
+    });
+
+    test('data checks report sheet rows', () => {
+      const l = lines([['1-1', '9', 1], ['1-1', '1', 'abc'], ['2-1', '', 1]]);
+      const checks = E.buildSchedule(l, settings(), {}, mapping).checks;
+      eq(checks.map((c) => c.level), ['error', 'warning', 'warning', 'error']);
+      ok(checks[0].text.startsWith('Row 2: no core-weight rule for "9"'), checks[0].text);
+      ok(checks[2].text.includes('duplicate WO'), checks[2].text);
+      ok(checks[3].text.startsWith('Row 4: copperweight is empty'), checks[3].text);
+    });
+
+    test('exportRows includes source columns, timing and notes', () => {
+      const l = lines([['1-1-1', '1', 3]]);
+      const r = E.buildSchedule(l, settings(), {}, mapping);
+      const [row] = E.exportRows(r, ['WO', 'Cu'], { 'WO 1-1': 'check spool' }, '07:00');
+      eq([row.Order, row.Job, row.WO, row.Cu, row['Loading minutes'], row['Job note']], [1, 'WO 1-1', '1-1-1', '1', 5.75, 'check spool']);
+      eq(row['Last core out'], E.formatClock('07:00', 20.5), 'out = last core loaded + travel');
+    });
+
+    /* ---------- due dates ---------- */
+
+    test('parseDueDate understands common formats and rejects junk', () => {
+      const d = E.parseDueDate('2026-11-16');
+      eq(E.parseDueDate('11/16/2026'), d, 'US');
+      eq(E.parseDueDate('11/16/26'), d, 'US short year');
+      eq(E.parseDueDate('16/11/2026'), d, 'day first when > 12');
+      eq(E.parseDueDate('46342'), d, 'Excel serial');
+      eq(E.parseDueDate('16 Nov 2026'), d, 'written');
+      eq(E.parseDueDate('2026-11-16 08:00'), d, 'ISO with time');
+      eq([E.parseDueDate(''), E.parseDueDate('soon'), E.parseDueDate('13/13/2026'), E.parseDueDate('2026-02-30')], [null, null, null, null], 'invalid');
+    });
+
+    test('autoMap prefers "Due date" over a generic "Date" column', () => {
+      eq(E.autoMap(['Date', 'Copperweight', 'Due date']).due, 'Due date');
+      eq(E.autoMap(['Date', 'Copperweight']).due, 'Date');
+    });
+
+    test('urgency steps and weights', () => {
+      eq([-3, 0, 1, 3, 7, 8, null].map((d) => E.urgencyFor(d, 'normal').points), [100, 80, 50, 25, 10, 0, 0]);
+      eq(E.urgencyFor(-1, 'strong').points, 200);
+      eq(E.urgencyFor(-1, 'off').points, 0);
+      eq(E.urgencyFor(-2, 'normal').label, 'overdue 2d');
+    });
+
+    const dueRows = [
+      ['10-1', 'h', 1, '', '2026-12-30'],   // light, not urgent: Monday's natural first pick
+      ['20-1', '4', 1, '', '2026-11-13'],   // heavy, overdue on 2026-11-16
+      ['30-1', '1', 1, '', ''],
+    ];
+    const planOn = (over = {}) => settings({ planDate: '2026-11-16', jobLimit: 1, ...over });
+
+    test('an overdue job is picked ahead of the day preference', () => {
+      const l = lines(dueRows);
+      eq(order(E.buildSchedule(l, planOn({ dueWeight: 'off' }), {}, mapping)), ['10-1'], 'ignored');
+      const r = E.buildSchedule(l, planOn(), {}, mapping);
+      eq(order(r), ['20-1'], 'normal');
+      eq([r.lines[0].daysLeft, r.lines[0].urgency], [-3, 100]);
+      ok(E.explain(r.lines[0]).includes('overdue 3d +100'), E.explain(r.lines[0]));
+      eq(r.stats.due.overdueScheduled, 1);
+    });
+
+    test('a job is as urgent as its earliest line, and all its lines carry it', () => {
+      const l = lines([['5-1-1', '2', 1, '', '2026-12-30'], ['5-1-2', '2', 1, '', '2026-11-16'], ['6-1', '2', 1, '', '']]);
+      const r = E.buildSchedule(l, planOn({ jobLimit: 0 }), {}, mapping);
+      eq(r.lines.filter((x) => x.job === 'WO 5-1').map((x) => x.daysLeft), [0, 0]);
+      eq(r.jobOrder[0], 'WO 5-1');
+    });
+
+    test('urgent jobs that miss the shift are reported', () => {
+      const l = lines([['20-1', '4', 1, '', '2026-11-13'], ['21-1', '4', 200, '', '2026-11-16']]);
+      const r = E.buildSchedule(l, planOn({ fillShift: true, shiftHours: 1 }), {}, mapping);
+      eq(r.jobOrder, ['WO 20-1']);
+      eq(r.stats.due.urgentLeftOut, ['WO 21-1']);
+    });
+
+    test('unreadable due dates are flagged and ignored', () => {
+      const l = lines([['1-1', '1', 1, '', 'ASAP']]);
+      const r = E.buildSchedule(l, planOn(), {}, mapping);
+      ok(r.checks.some((c) => c.text.includes('due date "ASAP"')), 'warning present');
+      eq(r.lines[0].daysLeft, null);
+    });
+
+    /* ---------- scheduler logic ---------- */
+
+    test('production days: weekends do not count, Saturday due means today', () => {
+      const fri = E.parseDueDate('2026-11-13');
+      eq(E.workDaysBetween(fri, E.parseDueDate('2026-11-16')), 1, 'Fri → Mon');
+      eq(E.workDaysBetween(fri, E.parseDueDate('2026-11-14')), 0, 'Fri → Sat');
+      eq(E.workDaysBetween(fri, E.parseDueDate('2026-11-20')), 5, 'Fri → next Fri');
+      eq(E.workDaysBetween(E.parseDueDate('2026-11-16'), fri), -1, 'Mon → previous Fri');
+      const l = lines([['1-1', '1', 1, '', '2026-11-16'], ['2-1', '1', 1, '', '2026-11-14']]);
+      const r = E.buildSchedule(l, settings({ day: 'Friday', planDate: '2026-11-13' }), {}, mapping);
+      const by = (wo) => r.lines.find((x) => x.wo === wo);
+      eq([by('1-1').urgency, by('1-1').dueLabel], [50, 'Due Mon'], 'Monday is next work day');
+      eq([by('2-1').urgency, by('2-1').dueLabel], [80, 'Due today'], 'Saturday is today');
+      eq(r.stats.due.dueTodayScheduled, 1);
+    });
+
+    test('slack: a long job due next work day scores as due today', () => {
+      // 20 cores of weight 4 = 20 × 2.5 = 50 min of loading; a 0.5 h shift means it needs 2 shifts.
+      const l = lines([['1-1', '4', 20, '', '2026-11-17'], ['2-1', '4', 1, '', '2026-11-17']]);
+      const r = E.buildSchedule(l, settings({ planDate: '2026-11-16', shiftHours: 0.5 }), {}, mapping);
+      const by = (wo) => r.lines.find((x) => x.wo === wo);
+      eq([by('1-1').shiftsNeeded, by('1-1').urgency], [2, 80], 'long job');
+      eq([by('2-1').shiftsNeeded, by('2-1').urgency], [1, 50], 'short job');
+      ok(E.explain(by('1-1')).includes('needs 2 shifts'), E.explain(by('1-1')));
+    });
+
+    test('a job spanning two weights runs straight through the change', () => {
+      const l = lines([['9-1-1', 'h', 1], ['8-1', 'h', 1], ['9-1-2', '1', 1], ['7-1', '1', 1]]);
+      const r = E.buildSchedule(l, settings(), {}, mapping);
+      // 1 then h is quicker (speeding up waits only for the etcher); 9-1 sits on both sides of the change.
+      eq(order(r), ['7-1', '9-1-2', '9-1-1', '8-1']);
+      eq(r.lines.map((x) => x.jobStart), [true, true, false, true], 'one setup per job');
+      ok(r.lines[2].continuesJob, 'flagged as continuing');
+    });
+
+    test('machine state: starting on the running weight skips travel and the speed change', () => {
+      const l = lines([['1-1', '1', 1]]);
+      const cold = E.buildSchedule(l, settings(), {}, mapping).lines[0];
+      const same = E.buildSchedule(l, settings({ runningWeight: '1' }), {}, mapping).lines[0];
+      const other = E.buildSchedule(l, settings({ runningWeight: '4' }), {}, mapping).lines[0];
+      eq([cold.minutes, cold.speedChangeMinutes, cold.outMinute], [5.25, 0, 20], 'cold start: setup, load, out after travel');
+      eq([same.minutes, same.fromMachine], [5.25, true], 'same weight carries on');
+      // 4 (speed 10) → 1 (speed 45) is speeding up: wait for the last 4 core to clear the etcher
+      // (half of its 30 min travel) plus 10 min to change, less the 2.5 min interval already counted.
+      eq([other.minutes, other.speedChangeMinutes, other.clearWaitMinutes], [27.75, 22.5, 15], 'different weight');
+    });
+
+    test('machine state: the weight already running goes first when that is quicker', () => {
+      const l = lines([['1-1', 'h', 1], ['2-1', '2', 1]]);
+      eq(order(E.buildSchedule(l, settings(), {}, mapping)), ['2-1', '1-1'], 'cold start: 2 then h is quicker');
+      const r = E.buildSchedule(l, settings({ runningWeight: 'h' }), {}, mapping);
+      eq(order(r), ['1-1', '2-1'], 'h already running: carry on with h');
+      ok(r.lines[0].fromMachine, 'flagged');
+    });
+
+    test('an overdue job runs first unless only minutes of other work go ahead of it', () => {
+      // Weight 4 is running. Finishing one 4 core first (7.5 min) then h ends at 40 min; h first then
+      // back to 4 ends at 80 min. The 7.5 min delay to the overdue h job is worth it.
+      const plan = settings({ planDate: '2026-11-16', runningWeight: '4' });
+      const short = lines([['1-1', '4', 1], ['2-1', 'h', 1, '', '2026-11-10']]);
+      eq(order(E.buildSchedule(short, plan, {}, mapping)), ['1-1', '2-1'], 'short 4 job first');
+      // 60 cores of 4 first (2.5 h) would make the overdue job wait far too long.
+      const long = lines([['1-1', '4', 60], ['2-1', 'h', 1, '', '2026-11-10']]);
+      eq(order(E.buildSchedule(long, plan, {}, mapping)), ['2-1', '1-1'], 'overdue first');
+    });
+
+    test('due tomorrow only needs to be in the shift, not early in it', () => {
+      const plain = lines([['1-1', 'h', 1], ['2-1', '3', 1]]);
+      const dated = lines([['1-1', 'h', 1], ['2-1', '3', 1, '', '2026-11-17']]);
+      const quickest = order(E.buildSchedule(plain, settings({ planDate: '2026-11-16' }), {}, mapping));
+      eq(order(E.buildSchedule(dated, settings({ planDate: '2026-11-16' }), {}, mapping)), quickest, 'same order as without the date');
+    });
+
+    test('waiting jobs gain points and get into a full late-week shift', () => {
+      // Friday, room for one job: heavy 4 normally wins over light h.
+      const l = lines([['10-1', 'h', 1], ['20-1', '4', 1]]);
+      const friday = (firstSeen) => E.buildSchedule(l, settings({ day: 'Friday', planDate: '2026-11-20', jobLimit: 1 }), { firstSeen }, mapping);
+      eq(order(friday({})), ['20-1'], 'fresh: heavy wins');
+      // h scores 10 on Friday, 4 scores 100: the light job needs the full +100 (10 work days) to win.
+      eq(order(friday({ 'WO 10-1': '2026-11-10' })), ['20-1'], '8 days is not yet enough against the heaviest weight');
+      const waited = friday({ 'WO 10-1': '2026-11-06', 'WO 20-1': '2026-11-20' });
+      eq(order(waited), ['10-1'], 'light job waiting 10 work days gets in');
+      eq([waited.lines[0].waitingDays, waited.lines[0].aging], [10, 100]);
+      ok(E.explain(waited.lines[0]).includes('waiting 10 work days +100'), E.explain(waited.lines[0]));
+      // Planning next Monday (23rd) on Thursday the 19th: only days that have passed count.
+      const ahead = (seen) => E.buildSchedule(l, settings({ planDate: '2026-11-23' }), { firstSeen: { 'WO 10-1': seen }, today: '2026-11-19' }, mapping)
+        .lines.find((x) => x.wo === '10-1').waitingDays;
+      eq(ahead('2026-11-19'), 0, 'seen today, planned ahead: no waiting yet');
+      eq(ahead('2026-11-16'), 3, 'seen Monday: Tue, Wed, Thu');
+      const capped = E.buildSchedule(l, settings({ planDate: '2026-12-31' }), { firstSeen: { 'WO 10-1': '2026-01-05' } }, mapping);
+      eq(capped.lines.find((x) => x.wo === '10-1').aging, 100, 'capped');
+    });
+
+    test('slowing down waits for the last core to be fully out; speeding up only until it clears the etcher', () => {
+      const l = lines([['1-1', 'h', 1], ['2-1', '3', 1]]);
+      const r2 = (x) => Number(x.toFixed(2));
+      // h then 3 (by hand): slowing down waits h's full 5 min travel + 10 min change − the 0.21 min interval.
+      const hThen3 = { manualOrder: [l[0].uid, l[1].uid] };
+      const down = E.buildSchedule(l, settings(), hThen3, mapping).lines[1];
+      eq([down.wo, r2(down.speedChangeMinutes), down.clearWaitMinutes, down.changeDirection], ['2-1', 14.79, 5, 'down'], 'slowing down');
+      ok(E.explain(down).includes('slowing down: last core fully out'), E.explain(down));
+      // 3 then h: speeding up waits until the last 3 core is out of the etcher: half of 25 min.
+      const threeThenH = { manualOrder: [l[1].uid, l[0].uid] };
+      const up = E.buildSchedule(l, settings(), threeThenH, mapping).lines[1];
+      eq([up.wo, up.speedChangeMinutes, up.clearWaitMinutes, up.changeDirection], ['1-1', 21, 12.5, 'up'], 'speeding up');
+      ok(E.explain(up).includes('speeding up: last core out of the etcher'), E.explain(up));
+      eq(E.buildSchedule(l, settings({ clearUpPercent: 100 }), threeThenH, mapping).lines[1].speedChangeMinutes, 33.5, 'etcher at the end of the line');
+      eq(E.buildSchedule(l, settings({ clearUpPercent: 0 }), threeThenH, mapping).lines[1].speedChangeMinutes, 8.5, 'no clearing: just the change');
+      eq(r2(E.buildSchedule(l, settings({ clearDownPercent: 0 }), hThen3, mapping).lines[1].speedChangeMinutes), 9.79, 'slow-down clearing can be turned off');
+    });
+
+    test('with etcher clearing, the quickest shift runs slow → fast; the day order is beaten', () => {
+      const l = lines([['1-1', 'h', 1], ['2-1', '1', 1], ['3-1', '2', 1], ['4-1', '3', 1], ['5-1', '4', 1]]);
+      const ups = (r) => r.lines.filter((x, i) => i && x.targetSpeed > r.lines[i - 1].targetSpeed).length;
+      const r = E.buildSchedule(l, settings({ day: 'Wednesday' }), {}, mapping);
+      eq(ups(r), 4, `all four changes speed up: ${r.lines.map((x) => x.copper)}`);
+      ok(r.stats.savedMinutes > 0, `saved ${r.stats.savedMinutes} vs Wednesday's 2 → 3 → 1 → 4 → h`);
+    });
+
+    test('a job off its usual speed is its own block and is flagged', () => {
+      const m = { copper: 'Cu', wo: 'WO', speed: 'S' };
+      const l = E.buildLines([
+        { sheetRow: 2, values: { WO: '1-1', Cu: '2', S: '24' } },
+        { sheetRow: 3, values: { WO: '2-1', Cu: '2', S: '22' } },
+        { sheetRow: 4, values: { WO: '3-1', Cu: '2', S: '24' } },
+      ], m);
+      const r = E.buildSchedule(l, settings(), {}, m);
+      const off = r.lines.find((x) => x.wo === '2-1');
+      eq([off.targetSpeed, off.offSpeed, off.block], [22, true, '2|22'], 'own block at 22');
+      eq(Number(off.travel.toFixed(2)), Number((20 * 24 / 22).toFixed(2)), 'travel scales with speed');
+      ok(r.lines.indexOf(off) === 0 || r.lines.indexOf(off) === 2, `not between the two 24s: ${order(r)}`);
+      eq(r.stats.speedChanges, 1);
+      ok(r.checks.some((c) => c.level === 'info' && c.text.includes('runs at 22 instead of the usual 24')), JSON.stringify(r.checks));
+    });
+
+    test('line length and core pitch derive travel and interval from the speed', () => {
+      const rules = E.resolveRules({ rules: E.DEFAULT_RULES, lineLength: 400, corePitch: 20 });
+      const h = rules.find((r) => r.weight === 'h');
+      const four = rules.find((r) => r.weight === '4');
+      eq([h.firstMinutes, h.nextSeconds, h.derivedFirst, h.derivedNext], [5, 15, true, true], 'h: 400/80 min, 20/80 min');
+      eq([four.firstMinutes, four.nextSeconds], [40, 120], 'weight 4');
+      const typed = E.resolveRules({ rules: E.DEFAULT_RULES, lineLength: '', corePitch: 20 });
+      eq([typed[0].firstMinutes, typed[0].derivedFirst, typed[0].derivedNext], [5, false, true], 'blank length keeps typed travel');
+    });
+
+    test('done cores drop out of the plan and are returned separately', () => {
+      const l = lines([['1-1-1', '1', 1], ['1-1-2', '1', 1], ['2-1', '2', 1]]);
+      const r = E.buildSchedule(l, settings(), { done: { [l[0].uid]: '2026-11-13' } }, mapping);
+      eq(order(r).sort(), ['1-1-2', '2-1']);
+      eq(r.doneLines.map((x) => x.wo), ['1-1-1']);
+      eq(r.stats.doneLines, 1);
+      const allDone = E.buildSchedule(l, settings(), { done: { [l[2].uid]: '2026-11-13' } }, mapping);
+      eq(allDone.stats.totalJobs, 1, 'a fully done job is not counted');
+    });
+
+    test('run-on: with a following shift the last job may run over, at the speed the shift ends on', () => {
+      // 1 h shift: the first weight-4 job (out at 45 min) and the h core fit; the second 4 job does not.
+      const l = lines([['1-1', '4', 5], ['2-1', '4', 5], ['3-1', 'h', 1]]);
+      const base = settings({ day: 'Friday', fillShift: true, shiftHours: 1 });
+      const plain = E.buildSchedule(l, base, {}, mapping);
+      eq(plain.jobOrder, ['WO 1-1', 'WO 3-1'], 'without run-on only what fits');
+      const r = E.buildSchedule(l, { ...base, runOn: true }, {}, mapping);
+      eq(r.stats.runOnJob, 'WO 2-1');
+      eq(r.jobOrder.at(-1), 'WO 2-1', 'runs last');
+      ok(r.lines.at(-1).runOn && r.stats.runOnMinutes > 0, `into next shift ${r.stats.runOnMinutes}`);
+      eq(r.stats.overMinutes, 0, 'not reported as over capacity');
+    });
+
+    test('speed-setting change can be given per pair of weights', () => {
+      const l = lines([['1-1', 'h', 1], ['2-1', '3', 1]]);
+      const threeThenH = { manualOrder: [l[1].uid, l[0].uid] };
+      const base = E.buildSchedule(l, settings(), threeThenH, mapping).lines[1];
+      eq([base.settingMinutes, base.speedChangeMinutes], [10, 21], 'default: 12.5 clear + 10 - 1.5');
+      const matrix = { '3': { h: 25 }, h: { '3': 1 } };
+      const up = E.buildSchedule(l, settings({ speedChangeMatrix: matrix }), threeThenH, mapping).lines[1];
+      eq([up.settingMinutes, up.speedChangeMinutes], [25, 36], '3 -> h uses the pair: 12.5 + 25 - 1.5');
+      ok(E.explain(up).includes('25 min to change the setting'), E.explain(up));
+      const down = E.buildSchedule(l, settings({ speedChangeMatrix: matrix }), { manualOrder: [l[0].uid, l[1].uid] }, mapping).lines[1];
+      eq(Number(down.speedChangeMinutes.toFixed(2)), Number((5 + 1 - 12.5 / 60).toFixed(2)), 'h -> 3 uses its own cell');
+      const blank = E.buildSchedule(l, settings({ speedChangeMatrix: { '3': { h: '' } } }), threeThenH, mapping).lines[1];
+      eq(blank.settingMinutes, 10, 'blank cell falls back to the default');
+    });
+
+    test('filling a shift with 6–7 speed blocks stays fast (one full order search, not one per job)', () => {
+      // This took about 2.7 s before the order found once was reused while filling the shift.
+      const cfg = [['h/h', 80], ['1/1', 45], ['2/2', 24], ['3/3', 15], ['4/4', 10], ['1/1', 43], ['2/2', 22]];
+      const m = { copper: 'Cu', wo: 'WO', speed: 'S' };
+      const l = E.buildLines(Array.from({ length: 300 }, (_, i) => ({ sheetRow: i + 2, values: { WO: `${500 + i}-1-24`, Cu: cfg[i % 7][0], S: String(cfg[i % 7][1]) } })), m);
+      const t0 = performance.now();
+      const r = E.buildSchedule(l, settings({ day: 'Wednesday', fillShift: true, shiftHours: 4, setupMinutes: 0, speedChangeMinutes: 2 }), {}, m);
+      const ms = performance.now() - t0;
+      ok(r.stats.scheduledJobs > 200 && r.stats.overMinutes === 0, `${r.stats.scheduledJobs} jobs, over ${r.stats.overMinutes}`);
+      ok(ms < 1000, `took ${Math.round(ms)} ms`);
+    });
+
+    test('Saturday can be planned; due dates still count Mon–Fri', () => {
+      ok(E.DAYS.includes('Saturday'));
+      eq(E.dayScore('Saturday', 4), 100);
+      eq(E.workDaysBetween(E.parseDueDate('2026-11-14'), E.parseDueDate('2026-11-16')), 1, 'Sat → Mon is one production day');
+    });
+
+    test('jobs with a line that has no rule are held back, not timed as 0', () => {
+      const l = lines([['1-1-1', '1', 1], ['1-1-2', '9', 1], ['2-1', '2', 1]]);
+      const r = E.buildSchedule(l, settings(), {}, mapping);
+      eq(r.jobOrder, ['WO 2-1']);
+      eq(r.stats.blockedJobs, ['WO 1-1']);
+    });
+
+    test('pinned jobs are always kept in fill-shift mode', () => {
+      const l = lines([['1-1', '4', 10], ['2-1', '4', 10], ['3-1', 'h', 1]]);
+      const r = E.buildSchedule(l, settings({ fillShift: true, shiftHours: 0.5 }), { pins: ['WO 1-1', 'WO 2-1'] }, mapping);
+      eq(r.jobOrder.slice(0, 2).sort(), ['WO 1-1', 'WO 2-1']);
+      ok(r.stats.overMinutes > 0, 'flagged as over');
+    });
+
+    test('larger workbooks: more than 7 weight blocks still order quickly', () => {
+      const rules = [...E.DEFAULT_RULES, ...[5, 6, 7, 8].map((w) => ({ weight: String(w), speed: 10 - w, firstMinutes: 30, nextSeconds: 150 }))];
+      const rows = [];
+      for (let i = 0; i < 300; i++) rows.push([`${i}-1-1`, ['h', '1', '2', '3', '4', '5', '6', '7', '8'][i % 9], (i % 7) + 1]);
+      const t0 = performance.now();
+      const r = E.buildSchedule(lines(rows), settings({ rules, fillShift: true }), {}, mapping);
+      const ms = performance.now() - t0;
+      ok(r.stats.scheduledJobs > 0, 'scheduled');
+      ok(ms < 1500, `took ${Math.round(ms)} ms`);
+    });
+
+    test('checks: unmapped cores is a note; a sheet speed off the rule is a note too', () => {
+      const l = E.buildLines([{ sheetRow: 4, values: { Cu: 'h/h', S: '80' } }, { sheetRow: 5, values: { Cu: '1/1', S: '50' } }], { copper: 'Cu', speed: 'S' });
+      const checks = E.buildSchedule(l, settings(), {}, { copper: 'Cu', speed: 'S' }).checks;
+      ok(checks[0].text.startsWith('No Number of cores column is mapped, so each row is timed as one core'), checks[0].text);
+      eq(checks.length, 2, 'only the off-speed row');
+      eq(checks[1].level, 'info');
+      ok(checks[1].text.startsWith('Row 5: runs at 50 instead of the usual 45'), checks[1].text);
+      eq(l[0].mixed, false, '"h/h" is one weight, not mixed');
+    });
+
+    const failed = results.filter((r) => !r.ok);
+    document.getElementById('summary').textContent = failed.length ? `${failed.length} of ${results.length} failed` : `All ${results.length} tests passed`;
+    document.getElementById('summary').className = failed.length ? 'fail' : 'pass';
+    document.getElementById('results').innerHTML = results.map((r) =>
+      `<li class="${r.ok ? 'pass' : 'fail'}">${r.name}${r.ok ? '' : `<pre>${r.error.replace(/</g, '&lt;')}</pre>`}</li>`).join('');
+    window.testResults = { passed: results.length - failed.length, failed: failed.map((f) => `${f.name}: ${f.error}`) };
+  </script>
+</body>
+</html>

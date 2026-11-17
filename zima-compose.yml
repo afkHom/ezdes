@@ -1,3 +1,5 @@
+# ZimaOS (or any host that pulls the published image instead of building it).
+# The image is rebuilt and pushed to GHCR by the GitHub workflow on every push to main.
 services:
   ezdes:
     image: ghcr.io/afkhom/ezdes:latest
@@ -6,8 +8,8 @@ services:
     ports:
       - "8765:8765"
     volumes:
-      # Change the left side to the folder on Zima that contains your Excel files.
+      # Change the left side to the folder on Zima that holds your Excel files.
       - /DATA/Excel:/data:ro
-    environment:
-      EZDES_OPEN_BROWSER: "0"
+    # environment:
+    #   EZDES_ALLOWED_HOSTS: planner.company.lan   # only for dotted host names; IPs and *.local just work
     restart: unless-stopped

@@ -1,16 +1,11 @@
 @echo off
+rem Folder holding the production workbooks. Leave empty to only use "Choose a workbook".
+set "EZDES_DATA_DIR="
 set "EZDES_PORT=8777"
-set "EZDES_OPEN_BROWSER=1"
-where py >nul 2>nul
-if not errorlevel 1 (
-  py -3 "%~dp0ezdes_server.py"
-  goto :eof
-)
-where python >nul 2>nul
-if not errorlevel 1 (
-  python "%~dp0ezdes_server.py"
-  goto :eof
-)
-echo Python 3 is required to run EZDES locally.
-echo Install Python 3, then run this file again.
+
+where py >nul 2>nul && (py -3 "%~dp0server.py" & goto :eof)
+where python >nul 2>nul && (python "%~dp0server.py" & goto :eof)
+
+echo Python 3 is required to run the EZDES server.
+echo You can also open web\index.html directly to use it without the shared-folder button.
 pause
